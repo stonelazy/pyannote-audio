@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 #
-# Copyright (c) 2017-2020 CNRS
+# Copyright (c) 2017-2021 CNRS
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -20,30 +20,42 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Mapping, Optional, Text, Union
+import math
+from copy import deepcopy
+from itertools import combinations
+from typing import List, Optional, Tuple
+
+import numpy as np
+import torch
+from scipy.cluster.hierarchy import fcluster
 
 from pyannote.audio import Inference
 from pyannote.audio.core.io import AudioFile
 from pyannote.audio.core.pipeline import Pipeline
-from pyannote.core import Annotation
-from pyannote.database import get_annotated
-from pyannote.metrics.diarization import (
-    DiarizationPurityCoverageFMeasure,
-    GreedyDiarizationErrorRate,
-)
+from pyannote.audio.pipelines.utils import PipelineModel, get_devices, get_model
+from pyannote.audio.utils.signal import Binarize
+from pyannote.core import Annotation, SlidingWindow, SlidingWindowFeature
+from pyannote.core.utils.hierarchy import pool
 from pyannote.pipeline.parameter import Uniform
 
-from .segmentation import Segmentation
-from .speech_turn_assignment import SpeechTurnClosestAssignment
-from .speech_turn_clustering import SpeechTurnClustering
+from .resegmentation import Resegmentation
 
 
 class SpeakerDiarization(Pipeline):
     """Speaker diarization pipeline
 
+    1. Apply the pretrained segmentation model S on sliding chunks
+    2. Use a heuristic to remove "noisy" chunks (e.g. those on which S is not very confident)
+    3. Apply the pretrained embedding model E to get one embedding per ("clean" chunk, active speaker) pair
+    4. Apply hierarchical agglomerative clustering on those embeddings while preventing two speakers
+       from the same chunk to end up in the same cluster (cannot-link constraints)
+    5. Use this ("clean" chunks only) diarization as labels to adapt segmentation model S into a speaker tracking model T
+    6. Apply the fine-tuned speaker tracking model T on sliding chunks and assign each (chunk, active speaker) pair
+       to the most likely speaker.
+
     Parameters
     ----------
-    segmentation : Inference or str, optional
+    segmentation : Model or str, optional
         `Inference` instance used to extract raw segmentation scores.
         When `str`, assumes that file already contains a corresponding key with
         precomputed scores. Defaults to "seg".
@@ -53,67 +65,87 @@ class SpeakerDiarization(Pipeline):
         embeddings. Defaults to "emb".
     metric : {'euclidean', 'cosine', 'angular'}, optional
         Metric used for comparing embeddings. Defaults to 'cosine'.
-    purity : float, optional
-        Optimize coverage for target purity.
-        Defaults to optimizing diarization error rate.
-    coverage : float, optional
-        Optimize purity for target coverage.
-        Defaults to optimizing diarization error rate.
-    fscore : bool, optional
-        Optimize for purity/coverage fscore.
-        Defaults to optimizing for diarization error rate.
-
-    # TODO: investigate the use of non-weighted fscore/purity/coverage
 
     Hyper-parameters
     ----------------
-    cluster_min_duration : float
-        Do not cluster speech turns shorter than `cluster_min_duration`.
-        Assign them to the closest cluster (of long speech turns) instead.
+    activity_threshold : float between 0 and 1
+        A speaker is considered active as soon as one frame goes above `activity_threshold`.
+    confidence_threshold : float between 0 and 1
+        Segmentation model is considered confident on a given chunk if its confidence vlaue
+        goes above `confidence_threshold`. See code below to understand the heuristic uses
+        to compute this confidence measure.
+    clustering_threshold : float between 0 and 2 (in case of 'cosine' metric)
+        Agglomerative clustering stopping criterion.
     """
 
     def __init__(
         self,
-        segmentation: Union[Inference, Text] = "seg",
-        embeddings: Union[Inference, Text] = "emb",
+        segmentation: PipelineModel = "pyannote/Segmentation-PyanNet-DIHARD",
+        embedding: PipelineModel = "hbredin/SpeakerEmbedding-XVectorMFCC-VoxCeleb",
         metric: Optional[str] = "cosine",
-        purity: Optional[float] = None,
-        coverage: Optional[float] = None,
-        fscore: bool = False,
     ):
 
         super().__init__()
 
-        # temporary hack -- need to bring back old Wrapper/Wrappable logic
-        if isinstance(segmentation, Mapping):
-            segmentation = Inference(**segmentation)
-        if isinstance(embeddings, Mapping):
-            embeddings = Inference(**embeddings)
-
-        self.segmentation = Segmentation(scores=segmentation)
-
-        self.embeddings = embeddings
+        self.segmentation = segmentation
+        self.embedding = embedding
         self.metric = metric
 
-        self.clustering = SpeechTurnClustering(
-            embeddings=self.embeddings, metric=self.metric
+        segmentation_device, embedding_device = get_devices(needs=2)
+        self.seg_model_ = get_model(segmentation).to(segmentation_device)
+        self.emb_model_ = get_model(embedding).to(embedding_device)
+        # NOTE: `get_model` takes care of calling model.eval()
+
+        # duration of chunks (in seconds) given as input of segmentation model
+        self.seg_chunk_duration_ = self.seg_model_.specifications.duration
+        # step between two consecutive chunks (as ratio of chunk duration)
+        self.seg_chunk_step_ratio_ = 0.1
+        # number of speakers in output of segmentation model
+        self.seg_num_speakers_ = len(self.seg_model_.specifications.classes)
+        # duration of a frame (in seconds) in output of segmentation model
+        self.seg_frame_duration_ = (
+            self.segmentation_inference_.model.introspection.inc_num_samples
+            / self.audio_.sample_rate
+        )
+        # output frames as SlidingWindow instances
+        self.seg_frames_ = SlidingWindow(
+            start=0.0, step=self.seg_frame_duration_, duration=self.seg_frame_duration_
         )
 
-        self.assignment = SpeechTurnClosestAssignment(
-            embeddings=self.embeddings, metric=self.metric
+        # audio reader used by segmentation model
+        self.audio_ = self.seg_model_.audio
+
+        # prepare segmentation model for inference
+        self.segmentation_inference_ = Inference(
+            self.seg_model_,
+            window="sliding",
+            skip_aggregation=True,
+            duration=self.seg_chunk_duration_,
+            step=self.seg_chunk_step_ratio_ * self.seg_chunk_duration_,
+            batch_size=32,
         )
 
-        # hyper-parameter
-        self.cluster_min_duration = Uniform(0, 10)
+        # will be used to go from speaker activations SlidingWindowFeature instance
+        # to an actual diarization (as Annotation instance).
+        self.binarize_ = Binarize(
+            onset=0.5,
+            offset=0.5,
+            min_duration_on=0.0,
+            min_duration_off=0.0,
+            pad_onset=0.0,
+            pad_offset=0.0,
+        )
 
-        if sum((purity is not None, coverage is not None, fscore)):
-            raise ValueError(
-                "One must choose between optimizing for f-score, target purity, or target coverage."
-            )
+        self.resegmentation = Resegmentation(
+            segmentation=self.segmentation_inference_,
+            diarization="partial_diarization",
+            confidence="reliable_frames",
+        )
 
-        self.purity = purity
-        self.coverage = coverage
-        self.fscore = fscore
+        # hyperparameters
+        self.activity_threshold = Uniform(0.8, 1.0)
+        self.confidence_threshold = Uniform(0.0, 1.0)
+        self.clustering_threshold = Uniform(0.0, 2.0)
 
     def apply(self, file: AudioFile) -> Annotation:
         """Apply speaker diarization
@@ -129,166 +161,179 @@ class SpeakerDiarization(Pipeline):
             Speaker diarization
         """
 
-        # segmentation where speech turns are already clustered locally (with letters A/B/C/...)
-        segmentation = self.segmentation(file).rename_labels(generator="string")
+        # =====================================================================
+        # Apply the pretrained segmentation model S on sliding chunks.
+        # =====================================================================
 
-        # corner case where there is just one cluster already
-        if len(segmentation.labels()) < 2:
-            return segmentation
+        # output of segmentation model on each chunk
+        segmentations: SlidingWindowFeature = self.segmentation_inference_(file)
+        # TODO: don't use left- and right-most part of each chunk
+        # as this is where the model is usually not that good
 
-        # split segmentation into two parts:
-        # - clean (i.e. non-overlapping) and long-enough clusters
-        # - the rest of it
+        # number of frames in each chunk
+        num_frames_in_chunk = segmentations.data.shape[1]
+        # number of frames in the whole file
+        num_frames_in_file = math.ceil(
+            self.audio_.get_duration(file) / self.seg_frame_duration_
+        )
 
-        clean = segmentation.copy()
-        rest = segmentation.empty()
+        # =====================================================================
+        # Use a heuristic to remove "bad" chunks.
+        # here: those on which S is not very confident
+        # =====================================================================
 
-        for (segment, track), (other_segment, other_track) in segmentation.co_iter(
-            segmentation
-        ):
-            if segment == other_segment and track == other_track:
+        # confidence of segmentation model on each chunk
+        # shape = (num_chunks, )
+        confidences = np.mean(
+            np.min((np.abs(segmentations.data - 0.5) / 0.5), axis=2), axis=1
+        )
+        # TODO: use a different heuristic to also penalize chunks with overlap
+        # TODO: make confidence_threshold a percentile rather than an absolute value
+
+        # will eventually contain stacked embeddings of each ("good" chunk, active speaker) pair
+        embeddings = []
+        # will eventually contain the list of chunk indices of each ("good" chunk, active speaker) pair
+        chunk_indices = []
+        # will eventually contain the list of speaker indices of each ("good" chunk, active speaker) pair
+        active_speaker_indices = []
+        # will eventually contain the list of chunk indices where the segmentation model is confident no-one speaks
+        inactive_chunk_indices = []
+        # will eventually contain the list of embedding indices that cannot be merged
+        # because they come from the same chunk -- hence must be two different speakers.
+        cannot_link: List[Tuple[int, int]] = []
+        # counter for the total number of ("good" chunk, active speaker) pairs
+        k = 0
+
+        # =====================================================================
+        # Apply the pretrained embedding model E to get one embedding
+        # per ("good" chunk, active speaker) pair
+        # =====================================================================
+
+        for c, (chunk, segmentation) in enumerate(segmentations):
+
+            # skip "bad" chunks as they are likely to lead to bad clustering
+            if confidences[c] < self.confidence_threshold:
                 continue
 
-            rest[segment, track] = segmentation[segment, track]
-            try:
-                del clean[segment, track]
-            except KeyError:
-                pass
+            # a speaker is decide to be "active" as soon as its activation goes
+            # above `activity_threshold` (even if it is for just one frame)
+            is_active = np.max(segmentation, axis=0) > self.activity_threshold
 
-            rest[other_segment, other_track] = segmentation[other_segment, other_track]
-            try:
-                del clean[other_segment, other_track]
-            except KeyError:
-                pass
+            # number of active speakers in current chunk
+            num_active_speakers_in_chunk = np.sum(is_active)
 
-        # TODO: consider removing all short segments instead of short clusters
+            # skip (and remember) chunks where there is no active speaker
+            if num_active_speakers_in_chunk < 1:
+                inactive_chunk_indices.append(c)
+                continue
 
-        long_enough_local_clusters = [
-            local_cluster
-            for local_cluster, duration in clean.chart()
-            if duration > self.cluster_min_duration
-        ]
-        # corner case where there is no clean, long enough local clusters
-        if not long_enough_local_clusters:
-            return segmentation
+            # keep track of chunk and active speaker indices for post-clustering reconstruction
+            chunk_indices.append(num_active_speakers_in_chunk * [c])
+            active_speaker_indices.append(np.where(is_active)[0])
+            k += num_active_speakers_in_chunk
 
-        clean_long_enough = clean.subset(long_enough_local_clusters)
+            # extract speaker embeddings
+            with torch.no_grad():
 
-        rest.update(clean.subset(long_enough_local_clusters, invert=True), copy=False)
+                # read audio chunk
+                waveform = self.audio_.crop(file, chunk)[0].unsqueeze(dim=0)
+                # shape (1, num_channels == 1, num_samples == chunk_duration x sample_rate)
 
-        # at this point, we have split "segmentation" into two parts:
-        # - "clean_long_enough" uses A/B/C labels
-        # - "rest" uses A/B/C labels as well
+                # we give more weights to regions where speaker is active
+                # TODO: give more weights to non-overlapping regions
+                # TODO: give more weights to high-confidence regions
+                # TODO: give more weights in the middle of chunks
+                weights = torch.tensor(segmentation).T
+                # shape (num_speakers, num_frames)
 
-        # we apply clustering on "clean_long_enough" and use A/B/C labels
-        clustered_clean_long_enough = self.clustering(
-            file, clean_long_enough
-        ).rename_labels(generator="string")
-
-        # this will contain the final result using a combination of
-        # - A/B/C labels coming from above "clean_long_enough" clusters)
-        # - 1/2/3 labels coming from un-assigned "rest" segments
-        global_hypothesis = clustered_clean_long_enough.copy()
-
-        rest_copy = rest.copy()
-        for local_cluster in rest_copy.labels():
-            try:
-                # for each local cluster remaining in "rest", we find which global cluster it has been assigned to
-                segment, track = next(
-                    clean_long_enough.subset([local_cluster]).itertracks()
+                # forward pass
+                embedding = self.emb_model_(
+                    waveform.repeat(self.seg_num_speakers_, 1, 1).to(
+                        self.emb_model_.device
+                    ),
+                    weights=weights.to(self.emb_model_.device),
                 )
-                global_cluster = clustered_clean_long_enough[segment, track]
+                # shape (num_speakers, emb_dimension)
 
-                # we move its left-aside segments back into the corresponding global cluster
-                # we also remove those segments from "rest" to remember they are now dealt with.
-                for segment, track in rest_copy.subset([local_cluster]).itertracks():
-                    global_hypothesis[segment, track] = global_cluster
-                    del rest[segment, track]
+                embeddings.append(embedding[is_active].cpu())
 
-            except StopIteration:
-                # this happens if the original local cluster was not present at all in clean_long_enough
-                # it will be passed over to the upcoming "assignment" step (see below).
-                continue
+            # cannot-link constraints prevent merging two speakers
+            # from the same chunk
+            for (i, j) in combinations(range(num_active_speakers_in_chunk), 2):
+                cannot_link.append((k + i, k + j))
 
-        if len(rest) > 0:
-            rest.rename_labels(generator="int", copy=False)
-            assigned_rest = self.assignment(file, rest, global_hypothesis)
+        # stack everything as numpy arrays
+        embeddings = np.vstack(embeddings)
+        chunk_indices = np.hstack(chunk_indices)
+        active_speaker_indices = np.hstack(active_speaker_indices)
 
-            # assigned_rest uses a combination of
-            # - A/B/C labels for speech turns assigned to global_hypothesis clusters
-            # - 1/2/3 labels for those that could not be assigned because they were too dissimlar
+        # =====================================================================
+        # Apply hierarchical agglomerative clustering on embeddings and prevent
+        # two speakers from the same chunk to end up in the same cluster
+        # =====================================================================
 
-            global_hypothesis.update(assigned_rest, copy=False)
+        # TODO: handle corner case where there is strictly less than two ("good" chunk, active speaker) pair
 
-        return global_hypothesis
+        # hierarchical agglomerative clustering with "pool" linkage
+        Z = pool(
+            embeddings,
+            metric=self.metric,
+            cannot_link=cannot_link,
+        )
+        clusters = fcluster(Z, self.clustering_threshold, criterion="distance")
+        num_clusters = len(np.unique(clusters))
 
-    def loss(self, file: AudioFile, hypothesis: Annotation) -> float:
-        """Compute coverage at target purity (or vice versa)
+        # use clustering result to assign each active speaker segmentation score
+        # to the "right" speaker.
+        aggregated = np.zeros((num_frames_in_file, num_clusters))
+        overlapped = np.zeros((num_frames_in_file, num_clusters))
+        chunks = segmentations.sliding_window
+        for cluster, c, a in zip(clusters, chunk_indices, active_speaker_indices):
+            # add original segmentation score to the "right" speaker
+            start_frame = round(chunks[c].start / self.seg_frame_duration_)
+            aggregated[
+                start_frame : start_frame + num_frames_in_chunk, cluster - 1
+            ] += segmentations.data[c, :, a]
+            # remember how many chunks were added on this particular speaker
+            overlapped[
+                start_frame : start_frame + num_frames_in_chunk, cluster - 1
+            ] += 1.0
 
-        Parameters
-        ----------
-        file : `dict`
-            File as provided by a pyannote.database protocol.
-        hypothesis : `pyannote.core.Annotation`
-            Speech turns.
+        # also keep track of chunks where no-one speaks as this is important
+        # information as well for the subsequent speaker tracking step
+        for c in inactive_chunk_indices:
+            start_frame = round(chunks[c].start / self.seg_frame_duration_)
+            overlapped[start_frame : start_frame + num_frames_in_chunk] += 1.0
 
-        Returns
-        -------
-        coverage (or purity) : float
-            When optimizing for target purity:
-                If purity < target_purity, returns (purity - target_purity).
-                If purity > target_purity, returns coverage.
-            When optimizing for target coverage:
-                If coverage < target_coverage, returns (coverage - target_coverage).
-                If coverage > target_coverage, returns purity.
-        """
+        # make sure that, when at least one speaker is active, other speakers
+        # are considered inactive (and not just "bad" chunks).
+        # this is done by setting `overlapped` indices to (at least) 1.
+        any_active = np.mean(overlapped, axis=1) > 0
+        overlapped[any_active] = np.maximum(1.0, overlapped[any_active])
 
-        fmeasure = DiarizationPurityCoverageFMeasure()
+        partial_speaker_activations = SlidingWindowFeature(
+            aggregated / overlapped, self.seg_frames_
+        )
 
-        reference: Annotation = file["annotation"]
-        _ = fmeasure(reference, hypothesis, uem=get_annotated(file))
-        purity, coverage, _ = fmeasure.compute_metrics()
+        # =====================================================================
+        # Use this ("good" chunks) diarization as labels to adapt
+        # segmentation model S into a speaker tracking model T
+        # =====================================================================
 
-        if self.purity is not None:
-            if purity > self.purity:
-                return purity - self.purity
-            else:
-                return coverage
+        # we use the fact that partial_speaker_activations is NaN on (previously
+        # ignored) "bad" chunks to mark those frames as unreliable for training
+        # the speaker tracking model
+        reliable_frames = deepcopy(partial_speaker_activations)
+        reliable_frames.data = 1.0 * (
+            np.mean(np.isnan(reliable_frames.data), axis=1, keepdims=True) < 1.0
+        )
+        file["reliable_frames"] = reliable_frames
 
-        elif self.coverage is not None:
-            if coverage > self.coverage:
-                return coverage - self.coverage
-            else:
-                return purity
+        # now that reliable regions are known, we can replace NaNs by 0,
+        # and binarize speaker activations to get a partial (on "good" chunks)
+        # diarization
+        partial_speaker_activations.data[np.isnan(partial_speaker_activations.data)] = 0
+        file["partial_diarization"] = self.binarize_(partial_speaker_activations)
 
-    def get_metric(
-        self,
-    ) -> Union[GreedyDiarizationErrorRate, DiarizationPurityCoverageFMeasure]:
-        """Return new instance of diarization metric"""
-
-        if (self.purity is not None) or (self.coverage is not None):
-            raise NotImplementedError(
-                "pyannote.pipeline will use `loss` method fallback."
-            )
-
-        if self.fscore:
-            return DiarizationPurityCoverageFMeasure(collar=0.0, skip_overlap=False)
-
-        # defaults to optimizing diarization error rate
-        return GreedyDiarizationErrorRate(collar=0.0, skip_overlap=False)
-
-    def get_direction(self):
-        """Optimization direction"""
-
-        if self.purity is not None:
-            # we maximize coverage at target purity
-            return "maximize"
-        elif self.coverage is not None:
-            # we maximize purity at target coverage
-            return "maximize"
-        elif self.fscore:
-            # we maximize purity/coverage f-score
-            return "maximize"
-        else:
-            # we minimize diarization error rate
-            return "minimize"
+        speaker_activations = self.resegmentation.apply(file)
+        return self.binarize_(speaker_activations)
