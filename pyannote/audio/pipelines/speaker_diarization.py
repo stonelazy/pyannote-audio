@@ -48,8 +48,8 @@ class SpeakerDiarization(Pipeline):
     1. Apply the pretrained segmentation model S on sliding chunks
     2. Use a heuristic to remove "noisy" chunks (e.g. those on which S is not very confident)
     3. Apply the pretrained embedding model E to get one embedding per ("clean" chunk, active speaker) pair
-    4. Apply hierarchical agglomerative clustering on those embeddings while preventing two speakers
-       from the same chunk to end up in the same cluster (cannot-link constraints)
+    4. Apply hierarchical agglomerative clustering on those embeddings while (optionnally) preventing two
+       speakers from the same chunk to end up in the same cluster (cannot-link constraints)
     5. Use this ("clean" chunks only) diarization as labels to adapt segmentation model S into a speaker tracking model T
     6. Apply the fine-tuned speaker tracking model T on sliding chunks and assign each (chunk, active speaker) pair
        to the most likely speaker.
@@ -66,6 +66,8 @@ class SpeakerDiarization(Pipeline):
         embeddings. Defaults to "emb".
     metric : {'euclidean', 'cosine', 'angular'}, optional
         Metric used for comparing embeddings. Defaults to 'cosine'.
+    use_cannot_link_constraints : bool, optional
+        Whether to use same-chunk cannot-link constraints. Defaults to True.
 
     Hyper-parameters
     ----------------
@@ -84,6 +86,7 @@ class SpeakerDiarization(Pipeline):
         segmentation: PipelineModel = "pyannote/Segmentation-PyanNet-DIHARD",
         embedding: PipelineModel = "hbredin/SpeakerEmbedding-XVectorMFCC-VoxCeleb",
         metric: Optional[str] = "cosine",
+        use_cannot_link_constraints: bool = True,
     ):
 
         super().__init__()
@@ -91,6 +94,7 @@ class SpeakerDiarization(Pipeline):
         self.segmentation = segmentation
         self.embedding = embedding
         self.metric = metric
+        self.use_cannot_link_constraints = use_cannot_link_constraints
 
         segmentation_device, embedding_device = get_devices(needs=2)
         self.seg_model_ = get_model(segmentation).to(segmentation_device)
@@ -241,7 +245,6 @@ class SpeakerDiarization(Pipeline):
 
                 # we give more weights to regions where speaker is active
                 # TODO: give more weights to non-overlapping regions
-                # TODO: give more weights to high-confidence regions
                 # TODO: give more weights in the middle of chunks
                 weights = torch.tensor(segmentation).T
                 # shape (num_speakers, num_frames)
@@ -280,7 +283,7 @@ class SpeakerDiarization(Pipeline):
         Z = pool(
             embeddings,
             metric=self.metric,
-            cannot_link=cannot_link,
+            cannot_link=cannot_link if self.use_cannot_link_constraints else None,
         )
         clusters = fcluster(Z, self.clustering_threshold, criterion="distance")
         num_clusters = len(np.unique(clusters))
@@ -337,8 +340,8 @@ class SpeakerDiarization(Pipeline):
         partial_speaker_activations.data[np.isnan(partial_speaker_activations.data)] = 0
         file["partial_diarization"] = self.binarize_(partial_speaker_activations)
 
-        speaker_activations = self.resegmentation.apply(file)
-        return self.binarize_(speaker_activations)
+        file["resegmentation"] = self.resegmentation.apply(file)
+        return self.binarize_(file["resegmentation"])
 
     def get_metric(self) -> GreedyDiarizationErrorRate:
         return GreedyDiarizationErrorRate(collar=0.0, skip_overlap=False)
