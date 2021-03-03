@@ -36,6 +36,7 @@ from pyannote.audio.pipelines.utils import PipelineModel, get_devices, get_model
 from pyannote.audio.utils.signal import Binarize
 from pyannote.core import Annotation, SlidingWindow, SlidingWindowFeature
 from pyannote.core.utils.hierarchy import pool
+from pyannote.metrics.diarization import GreedyDiarizationErrorRate
 from pyannote.pipeline.parameter import Uniform
 
 from .resegmentation import Resegmentation
@@ -336,3 +337,6 @@ class SpeakerDiarization(Pipeline):
 
         speaker_activations = self.resegmentation.apply(file)
         return self.binarize_(speaker_activations)
+
+    def get_metric(self) -> GreedyDiarizationErrorRate:
+        return GreedyDiarizationErrorRate(collar=0.0, skip_overlap=False)
