@@ -262,6 +262,10 @@ class SpeakerDiarization(Pipeline):
             for (i, j) in combinations(range(num_active_speakers_in_chunk), 2):
                 cannot_link.append((k + i, k + j))
 
+        # handle corner case where there is strictly less than two ("good" chunk, active speaker) pair
+        if len(embeddings) < 2:
+            return Annotation(uri=file["uri"])
+
         # stack everything as numpy arrays
         embeddings = np.vstack(embeddings)
         chunk_indices = np.hstack(chunk_indices)
@@ -271,8 +275,6 @@ class SpeakerDiarization(Pipeline):
         # Apply hierarchical agglomerative clustering on embeddings and prevent
         # two speakers from the same chunk to end up in the same cluster
         # =====================================================================
-
-        # TODO: handle corner case where there is strictly less than two ("good" chunk, active speaker) pair
 
         # hierarchical agglomerative clustering with "pool" linkage
         Z = pool(
