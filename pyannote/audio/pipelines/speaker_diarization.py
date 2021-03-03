@@ -96,24 +96,23 @@ class SpeakerDiarization(Pipeline):
         self.emb_model_ = get_model(embedding).to(embedding_device)
         # NOTE: `get_model` takes care of calling model.eval()
 
+        # audio reader used by segmentation model
+        self.audio_ = self.seg_model_.audio
         # duration of chunks (in seconds) given as input of segmentation model
         self.seg_chunk_duration_ = self.seg_model_.specifications.duration
         # step between two consecutive chunks (as ratio of chunk duration)
-        self.seg_chunk_step_ratio_ = 0.1
+        self.seg_chunk_step_ratio_ = 0.5
         # number of speakers in output of segmentation model
         self.seg_num_speakers_ = len(self.seg_model_.specifications.classes)
         # duration of a frame (in seconds) in output of segmentation model
         self.seg_frame_duration_ = (
-            self.segmentation_inference_.model.introspection.inc_num_samples
+            self.seg_model_.introspection.inc_num_samples
             / self.audio_.sample_rate
         )
         # output frames as SlidingWindow instances
         self.seg_frames_ = SlidingWindow(
             start=0.0, step=self.seg_frame_duration_, duration=self.seg_frame_duration_
         )
-
-        # audio reader used by segmentation model
-        self.audio_ = self.seg_model_.audio
 
         # prepare segmentation model for inference
         self.segmentation_inference_ = Inference(

@@ -132,7 +132,7 @@ class Resegmentation(Pipeline):
         file = dict(file)
 
         # do not fine tune the model if num_epochs is zero
-        if self.num_epochs_per_layers == 0:
+        if self.num_epochs_per_layer == 0:
             return file[self.diarization]
 
         # create a dummy train-only protocol where `file` is the only training file
@@ -155,10 +155,10 @@ class Resegmentation(Pipeline):
             augmentation=self.augmentation,
         )
 
-        callback = GraduallyUnfreeze(patience=self.num_epochs_per_layers)
+        callback = GraduallyUnfreeze(patience=self.num_epochs_per_layer)
         max_epochs = (
             len(ModelSummary(self.segmentation.model, mode="top").named_modules)
-            * self.num_epochs_per_layers
+            * self.num_epochs_per_layer
         )
 
         # duplicate the segmentation model as we will use it later
