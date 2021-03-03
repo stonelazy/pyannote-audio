@@ -48,8 +48,7 @@ from pyannote.audio.pipelines.utils import (
 from pyannote.audio.tasks import SpeakerTracking
 from pyannote.core import Annotation, SlidingWindow, SlidingWindowFeature
 from pyannote.database.protocol import SpeakerDiarizationProtocol
-
-# from pyannote.pipeline.parameter import Categorical, Integer, LogUniform
+from pyannote.pipeline.parameter import Categorical, Integer, LogUniform
 
 
 class Resegmentation(Pipeline):
@@ -119,12 +118,9 @@ class Resegmentation(Pipeline):
         self.diarization = diarization
         self.confidence = confidence
 
-        self.num_epochs_per_layer = 10
-        self.batch_size = 8
-        self.learning_rate = 0.1
-        # self.num_epochs = Integer(0, 20)
-        # self.batch_size = Categorical([1, 2, 4, 8, 16, 32])
-        # self.learning_rate = LogUniform(1e-6, 1)
+        self.batch_size = Categorical([32])
+        self.num_epochs_per_layer = Integer(1, 10)
+        self.learning_rate = LogUniform(1e-4, 1)
 
     def apply(self, file: AudioFile) -> Annotation:
 

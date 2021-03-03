@@ -143,8 +143,8 @@ class SpeakerDiarization(Pipeline):
 
         # hyperparameters
         self.activity_threshold = Uniform(0.8, 1.0)
-        self.confidence_threshold = Uniform(0.0, 1.0)
-        self.clustering_threshold = Uniform(0.0, 2.0)
+        self.confidence_threshold = Uniform(0.5, 1.0)
+        self.clustering_threshold = Uniform(0.5, 1.5)
 
     def apply(self, file: AudioFile) -> Annotation:
         """Apply speaker diarization
