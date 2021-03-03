@@ -101,13 +101,13 @@ class SpeakerDiarization(Pipeline):
         # duration of chunks (in seconds) given as input of segmentation model
         self.seg_chunk_duration_ = self.seg_model_.specifications.duration
         # step between two consecutive chunks (as ratio of chunk duration)
-        self.seg_chunk_step_ratio_ = 0.5
+        # TODO: study the effect of this parameter on clustering with "cannot-link" constraints
+        self.seg_chunk_step_ratio_ = 1.0
         # number of speakers in output of segmentation model
         self.seg_num_speakers_ = len(self.seg_model_.specifications.classes)
         # duration of a frame (in seconds) in output of segmentation model
         self.seg_frame_duration_ = (
-            self.seg_model_.introspection.inc_num_samples
-            / self.audio_.sample_rate
+            self.seg_model_.introspection.inc_num_samples / self.audio_.sample_rate
         )
         # output frames as SlidingWindow instances
         self.seg_frames_ = SlidingWindow(

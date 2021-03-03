@@ -191,7 +191,7 @@ class Resegmentation(Pipeline):
             window="sliding",
             skip_aggregation=True,
             duration=self.segmentation.duration,
-            step=self.segmentation.step,
+            step=0.1 * self.segmentation.duration,
             batch_size=self.segmentation.batch_size,
             device=self.segmentation.device,
         )
@@ -201,7 +201,7 @@ class Resegmentation(Pipeline):
             window="sliding",
             skip_aggregation=True,
             duration=self.segmentation.duration,
-            step=self.segmentation.step,
+            step=0.1 * self.segmentation.duration,
             batch_size=self.segmentation.batch_size,
             device=self.segmentation.device,
         )
