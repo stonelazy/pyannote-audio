@@ -158,6 +158,31 @@ class SpeakerDiarization(Pipeline):
         self.confidence_threshold = Uniform(0.5, 1.0)
         self.clustering_threshold = Uniform(0.5, 1.5)
 
+    @staticmethod
+    def pooling_func(
+        u: int,
+        v: int,
+        C: np.ndarray = None,
+        **kwargs,
+    ) -> np.ndarray:
+        """Compute average of newly merged cluster
+
+        Parameters
+        ----------
+        u : int
+            Cluster index.
+        v : int
+            Cluster index.
+        C : (2 x n_observations - 1, dimension) np.ndarray
+            Cluster embedding.
+
+        Returns
+        -------
+        Cuv : (dimension, ) np.ndarray
+            Embedding of newly formed cluster.
+        """
+        return C[u] + C[v]
+
     def apply(self, file: AudioFile) -> Annotation:
         """Apply speaker diarization
 
@@ -299,6 +324,7 @@ class SpeakerDiarization(Pipeline):
         Z = pool(
             embeddings,
             metric=self.metric,
+            pooling_func=self.pooling_func,
             cannot_link=cannot_link if self.use_cannot_link_constraints else None,
         )
         clusters = fcluster(Z, self.clustering_threshold, criterion="distance")
