@@ -271,7 +271,8 @@ class SpeakerDiarization(Pipeline):
 
                 # scale embeddings by the actual speech duration of each speaker
                 scales = np.mean(segmentation, axis=0, keepdims=True)
-                embedding *= scales
+                # shape (num_speakers, 1)
+                embedding *= scales.T
 
                 embeddings.append(embedding[is_active])
 
