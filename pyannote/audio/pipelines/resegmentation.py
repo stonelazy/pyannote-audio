@@ -118,8 +118,8 @@ class Resegmentation(Pipeline):
         self.diarization = diarization
         self.confidence = confidence
 
-        self.batch_size = Categorical([32])
-        self.num_epochs_per_layer = Integer(1, 10)
+        self.batch_size = Categorical([4, 8, 16, 32])
+        self.num_epochs_per_layer = Integer(1, 20)
         self.learning_rate = LogUniform(1e-4, 1)
 
     def apply(self, file: AudioFile) -> Annotation:

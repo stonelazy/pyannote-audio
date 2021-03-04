@@ -147,7 +147,7 @@ class SpeakerDiarization(Pipeline):
         )
 
         # hyperparameters
-        self.activity_threshold = Uniform(0.8, 1.0)
+        self.activity_threshold = Uniform(0.5, 1.0)
         self.confidence_threshold = Uniform(0.5, 1.0)
         self.clustering_threshold = Uniform(0.5, 1.5)
 
