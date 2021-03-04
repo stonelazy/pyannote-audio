@@ -221,6 +221,7 @@ class SpeakerDiarization(Pipeline):
         # =====================================================================
 
         for c, (chunk, segmentation) in enumerate(segmentations):
+            # shape of segmentation is (num_frames, num_speakers)
 
             # skip "bad" chunks as they are likely to lead to bad clustering
             if confidences[c] < self.confidence_threshold:
@@ -265,10 +266,14 @@ class SpeakerDiarization(Pipeline):
                         weights=weights.to(self.emb_model_.device),
                     ),
                     dim=1,
-                )
+                ).cpu()
                 # shape (num_speakers, emb_dimension)
 
-                embeddings.append(embedding[is_active].cpu())
+                # scale embeddings by the actual speech duration of each speaker
+                scales = np.mean(segmentation, axis=0, keepdims=True)
+                embedding *= scales
+
+                embeddings.append(embedding[is_active])
 
             # cannot-link constraints prevent merging two speakers
             # from the same chunk
