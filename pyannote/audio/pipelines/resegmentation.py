@@ -26,7 +26,7 @@ import math
 import tempfile
 from copy import deepcopy
 from types import MethodType
-from typing import Text
+from typing import List, Text
 
 import numpy as np
 import scipy.optimize
@@ -80,6 +80,9 @@ class Resegmentation(Pipeline):
     segmentation : Inference, Model, str, or dict, optional
         Pretrained segmentation inference.
         Defaults to "pyannote/Segmentation-PyanNet-DIHARD".
+    layers : list, optional
+        Only fine-tune those layers, unfreezing them in that order.
+        Defaults to fine-tuning all layers from output layer to input layer.
     augmentation : BaseWaveformTransform, or dict, optional
         torch_audiomentations waveform transform, used during fine-tuning.
         Defaults to no augmentation.
@@ -106,6 +109,7 @@ class Resegmentation(Pipeline):
     def __init__(
         self,
         segmentation: PipelineInference = "pyannote/Segmentation-PyanNet-DIHARD",
+        layers: List[Text] = None,
         augmentation: PipelineAugmentation = None,
         diarization: Text = "diarization",
         confidence: Text = None,
@@ -114,13 +118,14 @@ class Resegmentation(Pipeline):
 
         # base pretrained segmentation model
         self.segmentation: Inference = get_inference(segmentation)
+        self.layers = layers
         self.augmentation: BaseWaveformTransform = get_augmentation(augmentation)
 
         self.diarization = diarization
         self.confidence = confidence
 
-        self.batch_size = Categorical([4, 8, 16, 32])
-        self.num_epochs_per_layer = Integer(1, 20)
+        self.batch_size = Categorical([1, 2, 4, 8, 16, 32])
+        self.epochs_per_layer = Integer(1, 20)
         self.learning_rate = LogUniform(1e-4, 1)
 
     def apply(self, file: AudioFile) -> Annotation:
@@ -129,7 +134,7 @@ class Resegmentation(Pipeline):
         file = dict(file)
 
         # do not fine tune the model if num_epochs is zero
-        if self.num_epochs_per_layer == 0:
+        if self.epochs_per_layer == 0:
             return file[self.diarization]
 
         # create a dummy train-only protocol where `file` is the only training file
@@ -157,11 +162,11 @@ class Resegmentation(Pipeline):
         )
 
         fine_tuning_callback = GraduallyUnfreeze(
-            epochs_per_stage=self.num_epochs_per_layer
+            schedule=self.layers, epochs_per_stage=self.epochs_per_layer
         )
         max_epochs = (
             len(ModelSummary(self.segmentation.model, mode="top").named_modules)
-            * self.num_epochs_per_layer
+            * self.epochs_per_layer
         )
 
         # duplicate the segmentation model as we will use it later
