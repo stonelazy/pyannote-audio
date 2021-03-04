@@ -31,9 +31,8 @@ from typing import Text
 import numpy as np
 import scipy.optimize
 from pytorch_lightning import Trainer
-from pytorch_lightning.core.memory import ModelSummary
 from pytorch_lightning.callbacks import ProgressBar
-
+from pytorch_lightning.core.memory import ModelSummary
 from torch.optim import SGD
 from torch_audiomentations.core.transforms_interface import BaseWaveformTransform
 
@@ -139,8 +138,12 @@ class Resegmentation(Pipeline):
         class DummyProtocol(SpeakerDiarizationProtocol):
             name = "DummyProtocol"
 
+            # TODO: support multiple version of the same file? (e.g. )
+            # TODO: support multi-file segmentation (e.g. for cross-show diarization)
             def train_iter(self):
                 yield file
+
+            # TODO: support validation?
 
         spk = SpeakerTracking(
             DummyProtocol(),
@@ -153,7 +156,9 @@ class Resegmentation(Pipeline):
             augmentation=self.augmentation,
         )
 
-        fine_tuning_callback = GraduallyUnfreeze(patience=self.num_epochs_per_layer)
+        fine_tuning_callback = GraduallyUnfreeze(
+            epochs_per_stage=self.num_epochs_per_layer
+        )
         max_epochs = (
             len(ModelSummary(self.segmentation.model, mode="top").named_modules)
             * self.num_epochs_per_layer
