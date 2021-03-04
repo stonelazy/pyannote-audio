@@ -32,6 +32,8 @@ import numpy as np
 import scipy.optimize
 from pytorch_lightning import Trainer
 from pytorch_lightning.core.memory import ModelSummary
+from pytorch_lightning.callbacks import ProgressBar
+
 from torch.optim import SGD
 from torch_audiomentations.core.transforms_interface import BaseWaveformTransform
 
@@ -151,7 +153,7 @@ class Resegmentation(Pipeline):
             augmentation=self.augmentation,
         )
 
-        callback = GraduallyUnfreeze(patience=self.num_epochs_per_layer)
+        fine_tuning_callback = GraduallyUnfreeze(patience=self.num_epochs_per_layer)
         max_epochs = (
             len(ModelSummary(self.segmentation.model, mode="top").named_modules)
             * self.num_epochs_per_layer
@@ -172,12 +174,14 @@ class Resegmentation(Pipeline):
         # use this directory and save logs in there. that would be useful for
         # debugging purposes. for now, a new temporary directory is created
         # on-the-fly and automatically destroyed after training.
+        # TODO: this option might also activate progress bar and weights summary
         with tempfile.TemporaryDirectory() as default_root_dir:
             trainer = Trainer(
                 max_epochs=max_epochs,
                 gpus=1 if self.segmentation.device.type == "cuda" else 0,
-                callbacks=[callback],
+                callbacks=[fine_tuning_callback, ProgressBar(refresh_rate=0)],
                 checkpoint_callback=False,
+                weights_summary=None,
                 default_root_dir=default_root_dir,
             )
             trainer.fit(speaker_tracking_model)
