@@ -27,6 +27,7 @@ from typing import List, Optional, Text, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from scipy.cluster.hierarchy import fcluster
 
 from pyannote.audio import Inference
@@ -255,12 +256,15 @@ class SpeakerDiarization(Pipeline):
                 weights = torch.tensor(segmentation).T
                 # shape (num_speakers, num_frames)
 
-                # forward pass
-                embedding = self.emb_model_(
-                    waveform.repeat(self.seg_num_speakers_, 1, 1).to(
-                        self.emb_model_.device
+                # forward pass + L2 normalization
+                embedding = F.normalize(
+                    self.emb_model_(
+                        waveform.repeat(self.seg_num_speakers_, 1, 1).to(
+                            self.emb_model_.device
+                        ),
+                        weights=weights.to(self.emb_model_.device),
                     ),
-                    weights=weights.to(self.emb_model_.device),
+                    dim=1,
                 )
                 # shape (num_speakers, emb_dimension)
 
