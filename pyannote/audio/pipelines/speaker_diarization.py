@@ -23,7 +23,7 @@
 import math
 from copy import deepcopy
 from itertools import combinations
-from typing import List, Optional, Tuple
+from typing import List, Optional, Text, Tuple
 
 import numpy as np
 import torch
@@ -60,6 +60,9 @@ class SpeakerDiarization(Pipeline):
         `Inference` instance used to extract raw segmentation scores.
         When `str`, assumes that file already contains a corresponding key with
         precomputed scores. Defaults to "seg".
+    layers : list, optional
+        Only fine-tune those layers, unfreezing them in that order.
+        Defaults to fine-tuning all layers from output layer to input layer.
     embeddings : Inference or str, optional
         `Inference` instance used to extract speaker embeddings. When `str`,
         assumes that file already contains a corresponding key with precomputed
@@ -84,6 +87,7 @@ class SpeakerDiarization(Pipeline):
     def __init__(
         self,
         segmentation: PipelineModel = "pyannote/Segmentation-PyanNet-DIHARD",
+        layers: List[Text] = None,
         embedding: PipelineModel = "hbredin/SpeakerEmbedding-XVectorMFCC-VoxCeleb",
         metric: Optional[str] = "cosine",
         use_cannot_link_constraints: bool = True,
@@ -92,6 +96,7 @@ class SpeakerDiarization(Pipeline):
         super().__init__()
 
         self.segmentation = segmentation
+        self.layers = layers
         self.embedding = embedding
         self.metric = metric
         self.use_cannot_link_constraints = use_cannot_link_constraints
@@ -142,6 +147,7 @@ class SpeakerDiarization(Pipeline):
 
         self.resegmentation = Resegmentation(
             segmentation=self.segmentation_inference_,
+            layers=self.layers,
             diarization="partial_diarization",
             confidence="reliable_frames",
         )
