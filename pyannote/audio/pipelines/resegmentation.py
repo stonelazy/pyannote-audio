@@ -241,6 +241,30 @@ class Resegmentation(Pipeline):
         speakers = speaker_tracking_inference(file_copy)
         segmentations = segmentation_inference(file_copy)
 
+        if self.verbose:
+
+            segmentation_inference_debug = Inference(
+                self.seg_model_,
+                window="sliding",
+                skip_aggregation=False,
+                duration=self.chunk_duration_,
+                step=0.1 * self.chunk_duration_,
+            )
+            file[
+                "debug/resegmentation/pretrained_segmentation"
+            ] = segmentation_inference_debug(file_copy)
+
+            speaker_tracking_inference_debug = Inference(
+                speaker_tracking_model,
+                window="sliding",
+                skip_aggregation=False,
+                duration=self.chunk_duration_,
+                step=0.1 * self.chunk_duration_,
+            )
+            file[
+                "debug/resegmentation/finetuned_speaker_tracking"
+            ] = speaker_tracking_inference_debug(file_copy)
+
         _, num_frames_in_chunk, num_speakers = speakers.data.shape
         frame_duration = (
             self.seg_model_.introspection.inc_num_samples / self.audio_.sample_rate
@@ -250,6 +274,9 @@ class Resegmentation(Pipeline):
         )
         aggregated = np.zeros((num_frames_in_file, num_speakers))
         overlapped = np.zeros((num_frames_in_file, num_speakers))
+
+        # TODO: filter out inactive speakers before mapping
+        # TODO: do not use left- and right-most part of each chunk
 
         for (chunk, segmentation), (same_chunk, speaker) in zip(
             segmentations, speakers
@@ -269,13 +296,13 @@ class Resegmentation(Pipeline):
 
         frames = SlidingWindow(start=0.0, step=frame_duration, duration=frame_duration)
 
-        speaker_probabilities = SlidingWindowFeature(
+        mapped_segmentation = SlidingWindowFeature(
             aggregated / (overlapped + 1e-12), frames
         )
 
-        file["debug/resegmentation/speaker_probabilities"] = speaker_probabilities
+        file["debug/resegmentation/mapped_segmentation"] = mapped_segmentation
 
-        return self.binarize_(speaker_probabilities)
+        return self.binarize_(mapped_segmentation)
 
     def get_metric(self) -> GreedyDiarizationErrorRate:
         return GreedyDiarizationErrorRate(collar=0.0, skip_overlap=False)
