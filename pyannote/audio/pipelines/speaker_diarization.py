@@ -156,7 +156,7 @@ class SpeakerDiarization(Pipeline):
         # hyperparameters
         self.activity_threshold = Uniform(0.5, 1.0)
         self.confidence_threshold = Uniform(0.5, 1.0)
-        self.clustering_threshold = Uniform(0.5, 1.5)
+        self.clustering_threshold = Uniform(0.5, 1.0)
 
     @staticmethod
     def pooling_func(
