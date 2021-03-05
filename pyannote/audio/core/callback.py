@@ -41,7 +41,10 @@ class GraduallyUnfreeze(Callback):
     schedule:
         See examples for supported format.
     epochs_per_stage : int, optional
-        Number of epochs between each stage. Defaults to 1.
+        Number of epochs between each unfreeze stage. Defaults to 1.
+        Has no effect if schedule is provided as a {layer_name: epoch} dictionary.
+    max_epochs : int, optional
+        Stop training after that many epochs.
         Has no effect if schedule is provided as a {layer_name: epoch} dictionary.
 
     Usage
@@ -53,21 +56,24 @@ class GraduallyUnfreeze(Callback):
     --------
     # for a model with PyanNet architecture (sincnet > lstm > linear > task_specific),
     # those are equivalent and will unfreeze 'linear' at epoch 1, 'lstm' at epoch 2,
-    # and 'sincnet' at epoch 3.
+    # and 'sincnet' at epoch 3, and will stop training at epoch 4.
     GraduallyUnfreeze()
     GraduallyUnfreeze(schedule=['linear', 'lstm', 'sincnet'])
-    GraduallyUnfreeze(schedule={'linear': 1, 'lstm': 2, 'sincnet': 3})
+    GraduallyUnfreeze(schedule={'linear': 1, 'lstm': 2, 'sincnet': 3, '__stop__': 4})
 
     # the following syntax is also possible (with its dict-based equivalent just below):
     GraduallyUnfreeze(schedule=['linear', ['lstm', 'sincnet']], epochs_per_stage=10)
-    GraduallyUnfreeze(schedule={'linear': 10, 'lstm': 20, 'sincnet': 20})
-    # will unfreeze 'linear' at epoch 10, and both 'lstm' and 'sincnet' at epoch 20.
+    GraduallyUnfreeze(schedule={'linear': 10, 'lstm': 20, 'sincnet': 20, '__stop__': 30})
+    # will unfreeze 'linear' at epoch 10, 'lstm' and 'sincnet' at epoch 20, and will
+    # stop training at epoch 30.
+
     """
 
     def __init__(
         self,
         schedule: Union[Mapping[Text, int], List[Union[List[Text], Text]]] = None,
         epochs_per_stage: int = None,
+        max_epochs: int = None,
     ):
         super().__init__()
 
@@ -77,6 +83,7 @@ class GraduallyUnfreeze(Callback):
             epochs_per_stage = 1
 
         self.epochs_per_stage = epochs_per_stage
+        self.max_epochs = max_epochs
         self.schedule = schedule
 
     def on_fit_start(self, trainer: Trainer, model: Model):
@@ -99,6 +106,11 @@ class GraduallyUnfreeze(Callback):
                 layers = layers if isinstance(layers, List) else [layers]
                 for layer in layers:
                     _schedule[layer] = (depth + 1) * self.epochs_per_stage
+            _schedule["__stop__"] = (
+                (len(schedule) + 1) * self.epochs_per_stage
+                if self.max_epochs is None
+                else self.max_epochs
+            )
             schedule = _schedule
 
         self.schedule = schedule
@@ -110,4 +122,7 @@ class GraduallyUnfreeze(Callback):
     def on_train_epoch_start(self, trainer: Trainer, model: Model):
         for layer, epoch in self.schedule.items():
             if epoch == trainer.current_epoch:
-                model.unfreeze_by_name(layer)
+                if layer == "__stop__":
+                    trainer.should_stop = True
+                else:
+                    model.unfreeze_by_name(layer)

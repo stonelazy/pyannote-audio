@@ -25,6 +25,7 @@ from types import MethodType
 from typing import Optional
 
 import hydra
+import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import (
@@ -118,7 +119,12 @@ def main(cfg: DictConfig) -> Optional[float]:
     if pretrained:
         # for fine-tuning and/or transfer learning, we start by fitting
         # task-dependent layers and gradully unfreeze more layers
-        callbacks.append(GraduallyUnfreeze(epochs_per_stage=patience))
+        callbacks.append(
+            GraduallyUnfreeze(
+                epochs_per_stage=patience,
+                max_epochs=cfg.trainer.get("max_epochs", np.inf),
+            )
+        )
 
     learning_rate_monitor = LearningRateMonitor(logging_interval="step")
     callbacks.append(learning_rate_monitor)
