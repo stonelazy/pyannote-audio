@@ -147,10 +147,10 @@ class SpeakerDiarization(Pipeline):
         )
 
         self.resegmentation = Resegmentation(
-            segmentation=self.segmentation_inference_,
+            segmentation=self.seg_model_,
             layers=self.layers,
-            diarization="partial_diarization",
-            confidence="reliable_frames",
+            diarization="debug/diarization/partial",
+            confidence="debug/diarization/reliable_frames",
         )
 
         # hyperparameters
@@ -295,6 +295,8 @@ class SpeakerDiarization(Pipeline):
                 # shape (num_speakers, emb_dimension)
 
                 # scale embeddings by the actual speech duration of each speaker
+                # so that the pooling function used in clustering can give more
+                # weight to longer speech turn in each cluster
                 scales = np.mean(segmentation, axis=0, keepdims=True)
                 # shape (num_speakers, 1)
                 embedding *= scales.T
@@ -374,16 +376,15 @@ class SpeakerDiarization(Pipeline):
         reliable_frames.data = 1.0 * (
             np.mean(np.isnan(reliable_frames.data), axis=1, keepdims=True) < 1.0
         )
-        file["reliable_frames"] = reliable_frames
+        file["debug/diarization/reliable_frames"] = reliable_frames
 
         # now that reliable regions are known, we can replace NaNs by 0,
         # and binarize speaker activations to get a partial (on "good" chunks)
         # diarization
         partial_speaker_activations.data[np.isnan(partial_speaker_activations.data)] = 0
-        file["partial_diarization"] = self.binarize_(partial_speaker_activations)
+        file["debug/diarization/partial"] = self.binarize_(partial_speaker_activations)
 
-        file["resegmentation"] = self.resegmentation.apply(file)
-        return self.binarize_(file["resegmentation"])
+        return self.resegmentation(file)
 
     def get_metric(self) -> GreedyDiarizationErrorRate:
         return GreedyDiarizationErrorRate(collar=0.0, skip_overlap=False)
