@@ -152,9 +152,9 @@ class Resegmentation(Pipeline):
         )
 
         # hyper-parameters
-        self.batch_size = Categorical([1, 2, 4, 8, 16, 32])
+        self.batch_size = Categorical([1, 2, 4, 8])
         self.epochs_per_layer = Integer(1, 20)
-        self.learning_rate = LogUniform(1e-4, 1)
+        self.learning_rate = LogUniform(1e-4, 1e-1)
 
     def apply(self, file: AudioFile) -> Annotation:
 
