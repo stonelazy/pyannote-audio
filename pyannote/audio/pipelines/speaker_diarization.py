@@ -61,6 +61,9 @@ class SpeakerDiarization(Pipeline):
         `Inference` instance used to extract raw segmentation scores.
         When `str`, assumes that file already contains a corresponding key with
         precomputed scores. Defaults to "seg".
+    only_clustering : bool, optional
+        Apply clustering on all chunks (no "noisy" chunks removal), and skip
+        the speaker tracking step. Defaults to False.
     layers : list, optional
         Only fine-tune those layers, unfreezing them in that order.
         Defaults to fine-tuning all layers from output layer to input layer.
@@ -78,9 +81,10 @@ class SpeakerDiarization(Pipeline):
     activity_threshold : float between 0 and 1
         A speaker is considered active as soon as one frame goes above `activity_threshold`.
     confidence_threshold : float between 0 and 1
-        Segmentation model is considered confident on a given chunk if its confidence vlaue
+        Segmentation model is considered confident on a given chunk if its confidence value
         goes above `confidence_threshold`. See code below to understand the heuristic uses
-        to compute this confidence measure.
+        to compute this confidence measure. Forced to 0. (i.e. consider all chunks) when
+        only_clustering is True.
     clustering_threshold : float between 0 and 2 (in case of 'cosine' metric)
         Agglomerative clustering stopping criterion.
     """
@@ -88,19 +92,21 @@ class SpeakerDiarization(Pipeline):
     def __init__(
         self,
         segmentation: PipelineModel = "pyannote/Segmentation-PyanNet-DIHARD",
-        layers: List[Text] = None,
         embedding: PipelineModel = "hbredin/SpeakerEmbedding-XVectorMFCC-VoxCeleb",
         metric: Optional[str] = "cosine",
         use_cannot_link_constraints: bool = True,
+        only_clustering: bool = False,
+        layers: List[Text] = None,
     ):
 
         super().__init__()
 
         self.segmentation = segmentation
-        self.layers = layers
         self.embedding = embedding
         self.metric = metric
         self.use_cannot_link_constraints = use_cannot_link_constraints
+        self.only_clustering = only_clustering
+        self.layers = layers
 
         segmentation_device, embedding_device = get_devices(needs=2)
         self.seg_model_ = get_model(segmentation).to(segmentation_device)
@@ -113,7 +119,7 @@ class SpeakerDiarization(Pipeline):
         self.seg_chunk_duration_ = self.seg_model_.specifications.duration
         # step between two consecutive chunks (as ratio of chunk duration)
         # TODO: study the effect of this parameter on clustering with "cannot-link" constraints
-        self.seg_chunk_step_ratio_ = 1.0
+        self.seg_chunk_step_ratio_ = 0.5
         # number of speakers in output of segmentation model
         self.seg_num_speakers_ = len(self.seg_model_.specifications.classes)
         # duration of a frame (in seconds) in output of segmentation model
@@ -146,16 +152,17 @@ class SpeakerDiarization(Pipeline):
             pad_offset=0.0,
         )
 
-        self.resegmentation = Resegmentation(
-            segmentation=self.seg_model_,
-            layers=self.layers,
-            diarization="debug/diarization/partial",
-            confidence="debug/diarization/reliable_frames",
-        )
+        if not self.only_clustering:
+            self.resegmentation = Resegmentation(
+                segmentation=self.seg_model_,
+                layers=self.layers,
+                diarization="debug/diarization/partial",
+                confidence="debug/diarization/reliable_frames",
+            )
 
         # hyperparameters
+        self.confidence_threshold = 0.0 if self.only_clustering else Uniform(0.5, 1.0)
         self.activity_threshold = Uniform(0.5, 1.0)
-        self.confidence_threshold = Uniform(0.5, 1.0)
         self.clustering_threshold = Uniform(0.5, 1.0)
 
     @staticmethod
@@ -382,8 +389,12 @@ class SpeakerDiarization(Pipeline):
         # and binarize speaker activations to get a partial (on "good" chunks)
         # diarization
         partial_speaker_activations.data[np.isnan(partial_speaker_activations.data)] = 0
-        file["debug/diarization/partial"] = self.binarize_(partial_speaker_activations)
+        partial_diarization = self.binarize_(partial_speaker_activations)
 
+        if self.only_clustering:
+            return partial_diarization
+
+        file["debug/diarization/partial"] = partial_diarization
         return self.resegmentation(file)
 
     def get_metric(self) -> GreedyDiarizationErrorRate:
