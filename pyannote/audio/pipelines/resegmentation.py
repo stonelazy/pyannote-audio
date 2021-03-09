@@ -180,7 +180,8 @@ class Resegmentation(Pipeline):
 
         spk = SpeakerTracking(
             DummyProtocol(),
-            duration=self.chunk_duration_,
+            duration=1.0,
+            # duration=self.chunk_duration_,
             balance=None,
             weight=self.confidence,
             batch_size=self.batch_size,
@@ -233,16 +234,17 @@ class Resegmentation(Pipeline):
         speaker_tracking_inference = Inference(
             speaker_tracking_model,
             window="sliding",
-            skip_aggregation=True,
+            skip_aggregation=False,
             duration=self.chunk_duration_,
             step=0.1 * self.chunk_duration_,
         )
 
         speakers = speaker_tracking_inference(file_copy)
+        file["debug/resegmentation/aggregated_speaker_tracking"] = speakers
+
         segmentations = segmentation_inference(file_copy)
 
         if self.verbose:
-
             segmentation_inference_debug = Inference(
                 self.seg_model_,
                 window="sliding",
@@ -251,21 +253,12 @@ class Resegmentation(Pipeline):
                 step=0.1 * self.chunk_duration_,
             )
             file[
-                "debug/resegmentation/pretrained_segmentation"
+                "debug/resegmentation/aggregated_segmentation"
             ] = segmentation_inference_debug(file_copy)
 
-            speaker_tracking_inference_debug = Inference(
-                speaker_tracking_model,
-                window="sliding",
-                skip_aggregation=False,
-                duration=self.chunk_duration_,
-                step=0.1 * self.chunk_duration_,
-            )
-            file[
-                "debug/resegmentation/finetuned_speaker_tracking"
-            ] = speaker_tracking_inference_debug(file_copy)
+        _, num_frames_in_chunk, _ = segmentations.data.shape
+        _, num_speakers = speakers.data.shape
 
-        _, num_frames_in_chunk, num_speakers = speakers.data.shape
         frame_duration = (
             self.seg_model_.introspection.inc_num_samples / self.audio_.sample_rate
         )
@@ -277,16 +270,15 @@ class Resegmentation(Pipeline):
 
         # TODO: filter out inactive speakers before mapping
         # TODO: do not use left- and right-most part of each chunk
+        # TODO: do not use overlapping regions (might be dangerous in case a speaker is only overlapping)
 
-        for (chunk, segmentation), (same_chunk, speaker) in zip(
-            segmentations, speakers
-        ):
-            assert chunk == same_chunk
+        for chunk, segmentation in segmentations:
             start_frame = round(chunk.start / frame_duration)
+            speaker = speakers.crop(chunk, fixed=self.chunk_duration_)[
+                :num_frames_in_chunk
+            ]
 
-            cost = 1.0 - np.einsum("nS,ns->Ss", speaker, segmentation) / np.einsum(
-                "ns->s", segmentation
-            )
+            cost = -np.einsum("nS,ns->Ss", speaker, segmentation)
             S, s = scipy.optimize.linear_sum_assignment(cost)
             for Si, si in zip(S, s):
                 aggregated[
@@ -306,3 +298,7 @@ class Resegmentation(Pipeline):
 
     def get_metric(self) -> GreedyDiarizationErrorRate:
         return GreedyDiarizationErrorRate(collar=0.0, skip_overlap=False)
+
+    # TODO: try to use speaker embeddings instead of speaker tracking model?
+    # either with direct cosine distance (would solve the class imbalance problem)
+    # or with a classifier trained on top of speaker embeddings
