@@ -346,7 +346,7 @@ class Inference:
             warm_up = np.ones((num_frames_per_chunk, 1))
             # ... for very first chunk
             warm_up_first = np.ones((num_frames_per_chunk, 1))
-            # ... forvery last chunk
+            # ... for very last chunk
             warm_up_last = np.ones((num_frames_per_chunk, 1))
 
             if not specifications.permutation_invariant:
