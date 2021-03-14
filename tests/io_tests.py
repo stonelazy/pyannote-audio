@@ -80,7 +80,7 @@ def test_can_load_from_file_like():
     loader = Audio()
 
     with open('tests/data/dev00.wav', 'rb') as f:
-        wav, sr = loader(f)
+        wav, sr = loader(f.read())
 
     assert isinstance(wav, Tensor)
     assert sr == 16000
@@ -90,8 +90,8 @@ def test_can_crop_from_file_like():
 
     with open('tests/data/dev00.wav', 'rb') as f:
         segment = Segment(0.2, 0.7)
-        wav, sr = loader.crop(f, segment)
+        wav, sr = loader.crop(f.read(), segment)
 
     assert isinstance(wav, Tensor)
     assert sr == 16000
-    assert len(wav) == 0.5*16000
+    assert wav.shape[1] == 0.5*16000

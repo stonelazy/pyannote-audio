@@ -132,8 +132,9 @@ class Audio:
 
     @staticmethod
     def validate_file(file: AudioFile) -> Union[Mapping, ProtocolFile]:
-        if isinstance(file, BufferedReader):
-            return {'audio': file.read()}
+
+        if isinstance(file, bytes):
+            return {'audio': file}
 
         if isinstance(file, str):
             file = Path(file)
@@ -257,7 +258,10 @@ class Audio:
             sample_rate = file["sample_rate"]
 
         elif "audio" in file:
-            waveform, sample_rate = torchaudio.load(file["audio"])
+            audio = file['audio']
+            if isinstance(audio, bytes):
+                audio = io.BytesIO(audio)
+            waveform, sample_rate = torchaudio.load(audio)
 
         channel = file.get("channel", None)
 
