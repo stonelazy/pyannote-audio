@@ -32,6 +32,8 @@ import math
 import warnings
 from pathlib import Path
 from typing import Mapping, Optional, Text, Tuple, Union
+from io import BufferedReader
+import io
 
 import librosa
 import torch
@@ -42,7 +44,9 @@ from pyannote.core import Segment
 from pyannote.core.utils.types import Alignment
 from pyannote.database import ProtocolFile
 
-AudioFile = Union[Path, Text, ProtocolFile, dict]
+torchaudio.set_audio_backend("soundfile")
+
+AudioFile = Union[Path, Text, ProtocolFile, dict, bytes]
 
 """
 Audio files can be provided to the Audio class using different types:
@@ -57,10 +61,6 @@ For last two options, an additional "channel" key can be provided as a zero-inde
 integer to load a specific channel:
         {"audio": Path("/path/to/stereo.wav"), "channel": 0}
 """
-
-torchaudio.USE_SOUNDFILE_LEGACY_INTERFACE = False
-torchaudio.set_audio_backend("soundfile")
-
 
 class Audio:
     """Audio IO
@@ -132,9 +132,8 @@ class Audio:
 
     @staticmethod
     def validate_file(file: AudioFile) -> Union[Mapping, ProtocolFile]:
-
-        # TODO: add support for file-like object
-        # see https://github.com/pyannote/pyannote-audio/issues/564
+        if isinstance(file, BufferedReader):
+            return {'audio': file.read()}
 
         if isinstance(file, str):
             file = Path(file)
@@ -164,7 +163,6 @@ class Audio:
                 return file
 
             if "audio" in file:
-
                 path = Path(file["audio"])
                 if not path.is_file():
                     raise ValueError(f"File {path} does not exist")
@@ -313,7 +311,13 @@ class Audio:
             frames = waveform.shape[1]
 
         else:
-            info = torchaudio.info(file["audio"])
+            audio = file['audio']
+
+            if isinstance(audio, bytes):
+                audio = io.BytesIO(audio)
+
+            info = torchaudio.info(audio)
+
             sample_rate = info.sample_rate
             frames = info.num_frames
 
@@ -365,8 +369,15 @@ class Audio:
 
         else:
             try:
+                audio = file['audio']
+
+                if isinstance(audio, bytes):
+                    audio = io.BytesIO(audio)
+
                 data, _ = torchaudio.load(
-                    file["audio"], frame_offset=start_frame, num_frames=num_frames
+                    audio,
+                    frame_offset=start_frame,
+                    num_frames=num_frames
                 )
             except RuntimeError:
                 msg = (
