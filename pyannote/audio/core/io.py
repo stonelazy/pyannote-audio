@@ -28,12 +28,11 @@ pyannote.audio relies on torchaudio for reading and librosa for resampling.
 We should switch torchaudio resampling as well at some point...
 """
 
+import io
 import math
 import warnings
 from pathlib import Path
 from typing import Mapping, Optional, Text, Tuple, Union
-from io import BufferedReader
-import io
 
 import librosa
 import torch
@@ -61,6 +60,7 @@ For last two options, an additional "channel" key can be provided as a zero-inde
 integer to load a specific channel:
         {"audio": Path("/path/to/stereo.wav"), "channel": 0}
 """
+
 
 class Audio:
     """Audio IO
@@ -134,7 +134,7 @@ class Audio:
     def validate_file(file: AudioFile) -> Union[Mapping, ProtocolFile]:
 
         if isinstance(file, bytes):
-            return {'audio': file}
+            return {"audio": file}
 
         if isinstance(file, str):
             file = Path(file)
@@ -258,7 +258,7 @@ class Audio:
             sample_rate = file["sample_rate"]
 
         elif "audio" in file:
-            audio = file['audio']
+            audio = file["audio"]
             if isinstance(audio, bytes):
                 audio = io.BytesIO(audio)
             waveform, sample_rate = torchaudio.load(audio)
@@ -315,7 +315,7 @@ class Audio:
             frames = waveform.shape[1]
 
         else:
-            audio = file['audio']
+            audio = file["audio"]
 
             if isinstance(audio, bytes):
                 audio = io.BytesIO(audio)
@@ -373,15 +373,13 @@ class Audio:
 
         else:
             try:
-                audio = file['audio']
+                audio = file["audio"]
 
                 if isinstance(audio, bytes):
                     audio = io.BytesIO(audio)
 
                 data, _ = torchaudio.load(
-                    audio,
-                    frame_offset=start_frame,
-                    num_frames=num_frames
+                    audio, frame_offset=start_frame, num_frames=num_frames
                 )
             except RuntimeError:
                 msg = (
