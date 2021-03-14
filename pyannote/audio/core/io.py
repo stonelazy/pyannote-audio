@@ -28,9 +28,9 @@ pyannote.audio relies on torchaudio for reading and librosa for resampling.
 We should switch torchaudio resampling as well at some point...
 """
 
-import io
 import math
 import warnings
+from io import BytesIO
 from pathlib import Path
 from typing import Mapping, Optional, Text, Tuple, Union
 
@@ -260,7 +260,7 @@ class Audio:
         elif "audio" in file:
             audio = file["audio"]
             if isinstance(audio, bytes):
-                audio = io.BytesIO(audio)
+                audio = BytesIO(audio)
             waveform, sample_rate = torchaudio.load(audio)
 
         channel = file.get("channel", None)
@@ -318,7 +318,7 @@ class Audio:
             audio = file["audio"]
 
             if isinstance(audio, bytes):
-                audio = io.BytesIO(audio)
+                audio = BytesIO(audio)
 
             info = torchaudio.info(audio)
 
@@ -376,7 +376,7 @@ class Audio:
                 audio = file["audio"]
 
                 if isinstance(audio, bytes):
-                    audio = io.BytesIO(audio)
+                    audio = BytesIO(audio)
 
                 data, _ = torchaudio.load(
                     audio, frame_offset=start_frame, num_frames=num_frames
