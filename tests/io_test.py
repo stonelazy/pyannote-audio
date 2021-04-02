@@ -6,7 +6,7 @@ from torch import Tensor
 
 from pyannote.audio.core.io import Audio
 from pyannote.core import Segment, SlidingWindow
-
+from urllib import request
 
 def test_audio_resample():
     "Audio is correctly resampled when it isn't the correct sample rate"
@@ -62,23 +62,58 @@ def test_can_crop_waveform():
     assert isinstance(wav, Tensor)
     assert sr == 16000
 
+# File Like Object Tests
 def test_can_load_from_file_like():
+    "Load entire wav of file like"
     loader = Audio()
 
     with open("tests/data/dev00.wav", "rb") as f:
-        wav, sr = loader(f.read())
+        wav, sr = loader(f)
 
     assert isinstance(wav, Tensor)
     assert sr == 16000
 
 
 def test_can_crop_from_file_like():
+    "Load cropped sections from file like objects"
     loader = Audio()
 
     with open("tests/data/dev00.wav", "rb") as f:
         segment = Segment(0.2, 0.7)
-        wav, sr = loader.crop(f.read(), segment)
+        wav, sr = loader.crop(f, segment)
 
     assert isinstance(wav, Tensor)
     assert sr == 16000
     assert wav.shape[1] == 0.5 * 16000
+
+def test_can_crop_from_download_like():
+    "Load cropped sections from file like objects"
+    loader = Audio()
+
+    with open("tests/data/dev00.wav", "rb") as f:
+        segment = Segment(0.2, 0.7)
+        wav, sr = loader.crop(f, segment)
+
+    assert isinstance(wav, Tensor)
+    assert sr == 16000
+    assert wav.shape[1] == 0.5 * 16000
+
+def test_can_load_from_download():
+    url = 'https://raw.githubusercontent.com/pyannote/pyannote-audio/master/tests/data/dev01.wav'
+    response = request.urlopen(url)
+    data = response.read()
+    loader = Audio()
+    wav, sr = loader(data)
+    assert isinstance(wav, Tensor)
+    assert sr == 16000
+
+def test_load_multiple_times_from_file_like():
+    """
+    Make sure that we can load from the same file like
+    object multiple times.
+    """
+    for i in range(3):
+        test_can_load_from_file_like()
+
+    for i in range(3):
+        test_can_crop_from_file_like()
