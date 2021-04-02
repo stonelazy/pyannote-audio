@@ -30,12 +30,13 @@ We should switch torchaudio resampling as well at some point...
 
 import math
 import warnings
-from io import BytesIO
+from io import BytesIO, IOBase
 from pathlib import Path
 from typing import Mapping, Optional, Text, Tuple, Union
 
 import librosa
 import torch
+import re
 import torchaudio
 from torch import Tensor
 
@@ -45,7 +46,7 @@ from pyannote.database import ProtocolFile
 
 torchaudio.set_audio_backend("soundfile")
 
-AudioFile = Union[Path, Text, ProtocolFile, dict, bytes]
+AudioFile = Union[Path, Text, ProtocolFile, dict, IOBase]
 
 """
 Audio files can be provided to the Audio class using different types:
@@ -132,15 +133,22 @@ class Audio:
 
     @staticmethod
     def validate_file(file: AudioFile) -> Union[Mapping, ProtocolFile]:
-
         if isinstance(file, bytes):
             return {"audio": file}
 
+        if isinstance(file, IOBase):
+            return {"audio": file.read()}
+
         if isinstance(file, str):
+            # Download if it's a url
+            if re.match(file, r"http(s)?://"):
+                response = request.urlopen(file)
+                return {"audio": response.read()}
+
             file = Path(file)
 
         if isinstance(file, Path):
-            file = {"audio": file}
+            return {"audio": file}
 
         if isinstance(file, Mapping):
 
