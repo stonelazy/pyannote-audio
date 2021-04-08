@@ -120,7 +120,7 @@ class Audio:
         """
 
         if isinstance(file, (ProtocolFile, dict)):
-            audio = file["audio"]
+            audio = str(file["audio"])
         else:
             audio = file
 
@@ -165,7 +165,7 @@ class Audio:
 
             if "audio" in file:
 
-                path = Path(file["audio"])
+                path = Path(str(file["audio"]))
                 if not path.is_file():
                     raise ValueError(f"File {path} does not exist")
 
@@ -259,7 +259,7 @@ class Audio:
             sample_rate = file["sample_rate"]
 
         elif "audio" in file:
-            waveform, sample_rate = torchaudio.load(file["audio"])
+            waveform, sample_rate = torchaudio.load(str(file["audio"]))
 
         channel = file.get("channel", None)
 
@@ -313,7 +313,7 @@ class Audio:
             frames = waveform.shape[1]
 
         else:
-            info = torchaudio.info(file["audio"])
+            info = torchaudio.info(str(file["audio"]))
             sample_rate = info.sample_rate
             frames = info.num_frames
 
@@ -366,7 +366,7 @@ class Audio:
         else:
             try:
                 data, _ = torchaudio.load(
-                    file["audio"], frame_offset=start_frame, num_frames=num_frames
+                    str(file["audio"]), frame_offset=start_frame, num_frames=num_frames
                 )
             except RuntimeError:
                 msg = (
